@@ -628,6 +628,27 @@ namespace voltdb {
                 position_type const& left() const noexcept;
                 position_type const& right() const noexcept;
             };
+            /**
+             * Representing a compaction for an address due to removal:
+             * src ==> dst
+             */
+            class movement_type {
+                void* m_dst;
+                void const* m_src;
+                bool const m_srcReleasible;
+            public:
+                constexpr movement_type(void* dst, void const* src, bool r) noexcept :
+                    m_dst(dst), m_src(src), m_srcReleasible(r) {}
+                constexpr void const* source() const noexcept {
+                    return m_src;
+                }
+                constexpr void* destination() const noexcept {
+                    return m_dst;
+                }
+                constexpr bool sourceReleasible() const noexcept {
+                    return m_srcReleasible;
+                }
+            };
         private:
             template<typename, typename, typename> friend struct IterableTableTupleChunks;
             friend class CompactingStorageTrait;       // needs pop_finalize
@@ -666,7 +687,7 @@ namespace voltdb {
                 map_type m_removedRegions{};
                 map<void const*, void const*> m_frozenBoundaries{};
                 vector<void*> m_moved{}, m_removed{};
-                vector<pair<void*, void const*>> m_movements;// (dst, <= src)
+                vector<movement_type> m_movements;
                 size_t m_size = 0;
                 void mapping();                        // set up m_movements
                 void shift();                          // adjust txn begin boundary
@@ -677,7 +698,7 @@ namespace voltdb {
                 void reserve(size_t);
                 // Register a single allocation to be removed later
                 void add(void*);
-                vector<pair<void*, void const*>> const& movements() const;       // #2 copied over to #1
+                vector<movement_type> const& movements() const;       // #2 copied over to #1
                 vector<void*> const& removed() const;
                 /**
                  * finalize on removed addresses, and some dst of moved address.
@@ -740,7 +761,7 @@ namespace voltdb {
              *
              * Returns whether compaction (i.e. memory copy) occurred.
              */
-            bool free(void*, function<void(void const*)> const&&);
+            bool free(void*, function<void(void const*, bool)> const&&);
             /**
              * State changes
              */
@@ -869,9 +890,12 @@ namespace voltdb {
             /**
              * Light weight free() operation at arbitrary
              * position
+             * callback arg: compacted addr (that gets moved over
+             * to overwrite), and indicator for whether finalizer
+             * need to be called on the compacted addr.
              */
             template<typename Tag> bool
-            remove(void const*, function<void(void const*)> const&&);
+            remove(void const*, function<void(void const*, bool)> const&&);
             /**
              * Batch removal using separate calls
              */
@@ -887,7 +911,8 @@ namespace voltdb {
              * \return (#removals, #finalizations)
              */
             template<typename Tag> pair<size_t, size_t>
-            remove_force(function<void(vector<pair<void*, void const*>> const&)> const&);
+            remove_force(function<void(
+                        vector<typename CompactingChunks::movement_type> const&)> const&);
             void remove_reset() noexcept;                // for testing only
             template<typename Tag> void clear();
         };

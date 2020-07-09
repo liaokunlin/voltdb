@@ -144,6 +144,7 @@ constexpr size_t TupleSize = 16;       // bytes per allocation
 constexpr size_t AllocsPerChunk = 512 / TupleSize;     // 512 comes from ChunkHolder::chunkSize()
 constexpr size_t NumTuples = 256 * AllocsPerChunk;     // # allocations: fits in 256 chunks
 
+using mt = typename CompactingChunks::movement_type;
 template<size_t N> using varray = array<void const*, N>;
 template<typename Alloc> bool remove_single(Alloc& alloc, void const* p) {
     // Probablistically tests 2 APIs
@@ -155,10 +156,10 @@ template<typename Alloc> bool remove_single(Alloc& alloc, void const* p) {
         alloc.remove_reserve(1);
         alloc.remove_add(const_cast<void*>(p));
         assert(1 ==
-                alloc.template remove_force<truth>([&r](vector<pair<void*, void const*>> const& entries) noexcept {
+                alloc.template remove_force<truth>([&r](vector<mt> const& entries) noexcept {
                         if (! entries.empty()) {
                             assert(entries.size() == 1);
-                            r = memcpy(entries[0].first, entries[0].second, TupleSize);
+                            r = memcpy(entries[0].destination(), entries[0].source(), TupleSize);
                         }
                     }).first);
         return r != p;
@@ -172,9 +173,9 @@ template<typename Alloc> pair<size_t, size_t> remove_multiple(Alloc& alloc, size
     for (size_t i = 0; i < n; ++i) {
         alloc.remove_add(const_cast<void*>(va_arg(args, void const*)));
     }
-    return alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries) noexcept {
+    return alloc.template remove_force<truth>([](vector<mt> const& entries) noexcept {
                 for_each(entries.begin(), entries.end(),
-                        [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                        [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
                 });
 }
 
@@ -183,9 +184,9 @@ template<typename Alloc, size_t N> pair<size_t, size_t> remove_multiple(
     alloc.remove_reserve(N);
     for_each(addr.cbegin(), addr.cend(),
             [&alloc](void const* p) { alloc.remove_add(const_cast<void*>(p)); });
-    return alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries) noexcept {
+    return alloc.template remove_force<truth>([](vector<mt> const& entries) noexcept {
             for_each(entries.begin(), entries.end(),
-                    [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                    [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
             });
 }
 
@@ -193,9 +194,9 @@ template<typename Alloc, typename Iter> pair<size_t, size_t> remove_multiple(
         Alloc& alloc, Iter const& beg, Iter const& end) {
     alloc.remove_reserve(distance(beg, end));
     for_each(beg, end, [&alloc](void const* p) { alloc.remove_add(const_cast<void*>(p)); });
-    return alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries) noexcept {
+    return alloc.template remove_force<truth>([](vector<mt> const& entries) noexcept {
             for_each(entries.begin(), entries.end(),
-                    [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                    [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
             });
 }
 
@@ -580,9 +581,9 @@ void testHookedCompactingChunks() {
                 alloc.remove_reserve(tb_removed.size());
                 for_each(tb_removed.cbegin(), tb_removed.cend(),
                         [&alloc](void* p) { alloc.remove_add(p); });
-                assert(alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries){
+                assert(alloc.template remove_force<truth>([](vector<mt> const& entries){
                             for_each(entries.begin(), entries.end(),
-                                    [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                                    [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
                             }).first == tb_removed.size());
             default:;
         }
@@ -621,7 +622,7 @@ TEST_F(TableTupleAllocatorTest, testHookedCompactingChunksRemovingIterator) {
                 ASSERT_EQ(i++, Gen::of(reinterpret_cast<unsigned char const*>(p)));
                 ASSERT_EQ(make_pair(1lu, 0lu),
                         alloc.template remove_force<truth>(
-                            [this](vector<pair<void*, void const*>> const& entries) {
+                            [this](vector<mt> const& entries) {
                                 ASSERT_TRUE(entries.empty());      // no compaction should ever be triggered
                             }));
             });
@@ -868,9 +869,9 @@ void testHookedCompactingChunksBatchRemove_multi1() {
             });
         advance(iter, 10);
     }
-    alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries){
+    alloc.template remove_force<truth>([](vector<mt> const& entries){
                 for_each(entries.begin(), entries.end(),
-                        [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                        [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
             });
     verify_snapshot_const();
     alloc.template thaw<truth>();
@@ -1364,9 +1365,9 @@ TEST_F(TableTupleAllocatorTest, TestBatchRemoveBug) {
     }
     alloc.remove_add(const_cast<void*>(addresses[AllocsPerChunk * 3 - 1]));
     ASSERT_EQ(make_pair(AllocsPerChunk + 2, 0lu),
-                alloc.template remove_force<truth>([this, addresses](vector<pair<void*, void const*>> const& entries) noexcept {
+                alloc.template remove_force<truth>([this, addresses](vector<mt> const& entries) noexcept {
                         ASSERT_EQ(1, entries.size());
-                        ASSERT_EQ(addresses[AllocsPerChunk * 2], entries[0].second);
+                        ASSERT_EQ(addresses[AllocsPerChunk * 2], entries[0].source());
                     }));
     ordered_pred(alloc, AllocsPerChunk * 2, {AllocsPerChunk * 3 - 1});
 }
@@ -1790,10 +1791,10 @@ TEST_F(TableTupleAllocatorTest, TestFinalizer_AllocAndRemoves) {
             alloc.remove_add(const_cast<void*>(addresses[i]));
         }
         ASSERT_EQ(make_pair(NumTuples / 2, NumTuples / 4),
-                alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries) noexcept {
+                alloc.template remove_force<truth>([](vector<mt> const& entries) noexcept {
                         for_each(entries.begin(), entries.end(),
-                                [](pair<void*, void const*> const& entry) {
-                                    memcpy(entry.first, entry.second, TupleSize);
+                                [](mt const& entry) {
+                                    memcpy(entry.destination(), entry.source(), TupleSize);
                                 });
                     }));
         // only the non-compacting subset of removal batch are finalized
@@ -1832,10 +1833,10 @@ TEST_F(TableTupleAllocatorTest, TestFinalizer_FrozenRemovals) {
             alloc.remove_add(const_cast<void*>(addresses[i]));
         }
         ASSERT_EQ(make_pair(NumTuples / 2, 0lu),
-                alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries) noexcept {
+                alloc.template remove_force<truth>([](vector<mt> const& entries) noexcept {
                         for_each(entries.begin(), entries.end(),
-                                [](pair<void*, void const*> const& entry) {
-                                    memcpy(entry.first, entry.second, TupleSize);
+                                [](mt const& entry) {
+                                    memcpy(entry.destination(), entry.source(), TupleSize);
                                 });
                     }));
         ASSERT_EQ(0, verifier.finalized().size());                 // agrees with return value
@@ -1914,9 +1915,9 @@ TEST_F(TableTupleAllocatorTest, TestFinalizer_InterleavedIterator) {
     }
     // finalize called on the 2nd half in the txn memory
     ASSERT_EQ(make_pair(NumTuples / 2, 0lu),
-            alloc.template remove_force<truth>([](vector<pair<void*, void const*>> const& entries){
+            alloc.template remove_force<truth>([](vector<mt> const& entries){
                 for_each(entries.begin(), entries.end(),
-                        [](pair<void*, void const*> const& entry) {memcpy(entry.first, entry.second, TupleSize);});
+                        [](mt const& entry) {memcpy(entry.destination(), entry.source(), TupleSize);});
             }));
     ASSERT_TRUE(verifier.finalized().empty());
     alloc.template thaw<truth>();
@@ -2069,11 +2070,11 @@ TEST_F(TableTupleAllocatorTest, TestFinalizer_bug1) {
 //            for (int i = j + AllocsPerChunk - (j == 0 ? 2 : 1); i >= j; --i) {
 //                alloc.remove_reserve(1);
 //                alloc.remove_add(const_cast<void*>(addresses[i]));
-//                ASSERT_EQ(1, alloc.template remove_force<truth>([this] (vector<pair<void*, void const*>> const& entries) {
+//                ASSERT_EQ(1, alloc.template remove_force<truth>([this] (vector<mt> const& entries) {
 //                                ASSERT_EQ(1, entries.size());
 //                                ASSERT_EQ(AllocsPerChunk - 1,
 //                                        Gen::of(reinterpret_cast<unsigned char const*>(entries[0].second)));
-//                                memcpy(entries[0].first, entries[0].second, TupleSize);
+//                                memcpy(entries[0].destination(), entries[0].source(), TupleSize);
 //                            }).first);
 //            }
 //        } while ((j += AllocsPerChunk) < BigNumTuples);

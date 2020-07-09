@@ -181,16 +181,16 @@ class PersistentTable : public ViewableAndReplicableTable<MaterializedViewTrigge
     friend class ScopedDeltaTableContext;
 
 private:
-    // no default ctor, no copy, no assignment
-    PersistentTable();
-    PersistentTable(PersistentTable const&);
-    PersistentTable operator=(PersistentTable const&);
+    PersistentTable() = delete;
+    PersistentTable(PersistentTable const&) = delete;
+    PersistentTable& operator=(PersistentTable const&) = delete;
 
     virtual void initializeWithColumns(TupleSchema const* schema,
             std::vector<std::string> const& columnNames,
             bool ownsTupleSchema);
     void rollbackIndexChanges(TableTuple* tuple, int upto);
     void compact(void* dst, void const* src, bool frozen);
+    void allocatorFinalize(void const*);
     void* allocatorCopier(void*__restrict__, void const*__restrict__) const;
 public:
     using Hook = storage::TxnPreHook<storage::NonCompactingChunks<storage::LazyNonCompactingChunk>,
